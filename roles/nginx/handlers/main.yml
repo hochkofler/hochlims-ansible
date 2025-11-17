@@ -1,0 +1,22 @@
+---
+
+- name: configtest before restart; fail immediately if our config is bad
+  when: ansible_os_family == 'Debian'
+  command: service nginx configtest
+  listen: restart nginx
+
+- name: restart nginx service
+  service: name=nginx state=restarted
+  listen: restart nginx
+
+- name: configtest before status check; fail immediately if our config is bad
+  when: ansible_os_family == 'Debian'
+  command: service nginx configtest
+  listen: nginx running
+
+- name: nginx service enabled and running
+  service:
+    name=nginx
+    state=started
+    enabled=yes
+  listen: nginx running

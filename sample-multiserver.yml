@@ -1,0 +1,104 @@
+---
+
+# This is a sample configuration. To use it, copy it to local-configure.yml
+# and edit.
+#
+# Multiserver configuration
+# -------------------------
+#
+# This is an example of the techniques you may use to install multiple,
+# separate Plone instances to the same server.
+#
+# Unlike with other examples, you won't want to use this without
+# major changes to reflect your server needs.
+
+
+# Things you MUST change
+# ----------------------
+
+admin_email:
+
+plone_initial_password:
+
+muninnode_query_ips:
+    - ip.of.munin.monitor
+
+# If you do not have a Munin monitor running, comment out the
+# muninnode_query_ips and uncomment the line below:
+
+# install_muninnode: no
+
+
+# Major settings
+# --------------
+
+# Plone 4.3.x, 5.0.x, 5.1.x and 5.2.x are currently tested and working.
+# Make sure this setting is quoted so that it's interpreted as a string.
+plone_version: '5.2.1'
+
+# 2 clients
+plone_client_count: 2
+
+# smallish
+plone_zodb_cache_size: 15000
+
+# and enforce that with a memory-monitor
+plone_client_max_memory: 750MB
+
+# Plone instance settings
+# -----------------------
+# Most settings can be either global or specific to a particular install.
+# Specify specific settings in the "playbook_plones list".
+# You must, at a minimum, specify specifics for plone_instance_name, which
+# is used to distinguish instances, and the ZEO/ZEO client ports.
+
+playbook_plones:
+  - plone_instance_name: primary
+    plone_zeo_port: 8100
+    plone_client_base_port: 8081
+    loadbalancer_port: 8080
+    loadbalancer_options: "maxconn 1 inter 60000 downinter 2000 rise 1 fall 2 on-error mark-down error-limit 15"
+    loadbalancer_listen_extra: "timeout connect 30s  # longer timeout for primary"
+    webserver_virtualhosts:
+      - hostname: "{{ inventory_hostname }}"
+        aliases:
+          - default
+        zodb_path: /Plone
+      - hostname: "{{ inventory_hostname }}"
+        protocol: https
+        aliases:
+          - default
+        zodb_path: /Plone
+        certificate_file: tests/snakeoil.pem
+        key_file: tests/snakeoil.pem
+    plone_restart_pre_script: |
+        echo pre restart script running
+    plone_restart_post_script: |
+        echo post restart script running
+  - plone_instance_name: secondary
+    plone_version: '5.1.5'
+    plone_zeo_port: 7100
+    plone_client_base_port: 7081
+    loadbalancer_port: 7080
+    loadbalancer_healthcheck: Off
+    plone_client_tcpcheck: off
+    plone_hot_monitor: cron
+    plone_buildout_cfg: buildout.cfg
+    webserver_virtualhosts:
+      - hostname: localhost
+        zodb_path: /Plone
+        extra: "# test comment here; added via extra"
+        location_extra: "# test comment here; added via location_extra"
+      - hostname: test.example.com
+        zodb_path: /Plone
+  - plone_instance_name: tertiary
+    plone_version: '4.3.18'
+    plone_zeo_port: 9100
+    plone_client_base_port: 9081
+    loadbalancer_port: 9080
+    loadbalancer_healthcheck: On
+    plone_hot_monitor: cron
+    plone_buildout_cfg: buildout.cfg
+    webserver_virtualhosts:
+      - hostname: test2.example.com
+        zodb_path: /Plone

@@ -1,0 +1,16 @@
+---
+
+- name: logwatch package installed
+  apt: pkg="logwatch" state=present
+
+- name: update-notifier-common installed
+  apt: pkg="update-notifier-common" state=present
+  ignore_errors: True
+
+- name: Check our update notify technology
+  stat:
+    path: /etc/update-motd.d
+  register: have_update_motd_d
+
+# - debug:
+#     var: have_update_motd_d.stat.exists

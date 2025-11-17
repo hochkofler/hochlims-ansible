@@ -1,0 +1,11 @@
+---
+
+- name: new aliases
+  ansible.builtin.command: newaliases
+  notify:
+    - reload postfix
+    
+- name: reload postfix
+  ansible.builtin.service:
+    name: postfix
+    state: reloaded

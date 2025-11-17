@@ -1,0 +1,15 @@
+---
+#roles/postfix/defaults/main.yml
+install_mailserver: yes
+
+mailserver_relayhost:
+
+mailserver_relayport:
+
+mailserver_relayuser:
+
+mailserver_relaypassword:
+
+mailserver_maincf_extras:
+
+mail_hostname: mail.laboratoriosifa.com

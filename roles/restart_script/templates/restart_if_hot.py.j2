@@ -1,0 +1,79 @@
+#!/opt/pyenv/versions/plone-{{ instance_config.plone_python_version }}/bin/python
+
+"""
+    Check memory use of clients; restart if resident memory use is too hot (high).
+
+    Strategy:
+      - get pid from supervisorctl;
+      - use ps to check rss;
+      - use restart_single_client.sh if too hot;
+      - assume root gets notified by crontab if restart happens.
+"""
+
+from __future__ import print_function
+
+import re
+import subprocess
+import sys
+
+if sys.version_info > (3,):
+    long = int
+
+# code borrowed from supervisor:
+class SuffixMultiplier:
+    # d is a dictionary of suffixes to integer multipliers.  If no suffixes
+    # match, default is the multiplier.  Matches are case insensitive.  Return
+    # values are in the fundamental unit.
+    def __init__(self, d, default=1):
+        self._d = d
+        self._default = default
+        # all keys must be the same size
+        self._keysz = None
+        for k in d.keys():
+            if self._keysz is None:
+                self._keysz = len(k)
+            else:
+                assert self._keysz == len(k)
+
+    def __call__(self, v):
+        v = v.lower()
+        for s, m in self._d.items():
+            if v[-self._keysz:] == s:
+                return int(v[:-self._keysz]) * m
+        return int(v) * self._default
+
+byte_size = SuffixMultiplier({'kb': 1024,
+                              'mb': 1024*1024,
+                              'gb': 1024*1024*long(1024),})
+# back to original code
+
+
+# variables set by Ansible:
+admin_email = "{{ admin_email }}"
+instance_discriminator =  "{{ '%s_' % item.plone_instance_name|default(plone_instance_name) }}"
+client_count = {{ item.plone_client_count|default(plone_client_count) }}
+max_memory = byte_size("{{ item.plone_client_max_memory|default(plone_client_max_memory) }}")
+restart_script = "{{ item.plone_target_path|default(plone_target_path) }}/{{ item.plone_instance_name|default(plone_instance_name) }}/scripts/restart_single_client.sh"
+
+pid_pattern = re.compile("pid (\d+)")
+one_mb = 1024.0 * 1024.0
+
+def in_mb(i):
+    return "{:0,.0f}MB".format(i / one_mb + 0.5)
+
+for client in range(0, client_count):
+    client_name = "{}zeoclient{}". format(instance_discriminator, client + 1)
+    status = subprocess.check_output("supervisorctl status {0}".format(client_name), shell=True)
+    match = pid_pattern.search(str(status))
+    if match is not None:
+        pid = match.group(1)
+        rez = subprocess.check_output("ps -q {} -o rss=".format(pid), shell=True).strip()
+        rez = long(rez) * 1024
+        # print client_name, in_mb(rez), in_mb(max_memory)
+        # print restart_script, client + 1
+        if rez > max_memory:
+            print("Restarting {}; {} > {}".format(client_name, in_mb(rez), in_mb(max_memory)))
+            print()
+            command = "{} {}".format(restart_script, client + 1)
+            print(command)
+            print(subprocess.check_output(command, shell=True).decode(), 'replace')
