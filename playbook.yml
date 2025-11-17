@@ -23,9 +23,6 @@
         - update_packages
         - plone
         - plone1
-        - plone2
-        - plone3
-        - plone4
         - haproxy
         - varnish
         - restart_script
@@ -44,9 +41,6 @@
       tags:
         - plone
         - plone1
-        - plone2
-        - plone3
-        - plone4
         - haproxy
         - varnish
         - restart_script
@@ -66,20 +60,6 @@
     - name: Ensure optional packages via apt
       when: ansible_os_family == 'Debian'
       apt: pkg="{{ additional_packages|default([]) }}" state=present
-
-    - name: Enable aditional repos for CentOS
-      yum: pkg={{ item }} state=present
-      when: ansible_distribution == 'CentOS'
-      with_items:
-        - epel-release
-      tags:
-        - munin
-        - varnish
-
-    - name: Ensure optional packages via yum
-      when: ansible_os_family == 'RedHat'
-      yum: name={{ item }} state=present update_cache=yes
-      with_items: "{{ additional_packages|default([]) }}"
 
     - name: Ensure selinux packages via yum
       when: ansible_os_family == 'RedHat' and ansible_selinux and ansible_selinux.status == 'enabled'
@@ -110,9 +90,6 @@
       tags:
         - plone
         - plone1
-        - plone2
-        - plone3
-        - plone4
         - haproxy
         - varnish
         - restart_script
@@ -127,27 +104,6 @@
       tags:
         - plone
         - plone1
-
-    - role: plone.plone_server
-      plone_config: "{{ playbook_plones[1]|default({}) }}"
-      when: playbook_plones|length > 1
-      tags:
-        - plone
-        - plone2
-
-    - role: plone.plone_server
-      plone_config: "{{ playbook_plones[2]|default({}) }}"
-      when: playbook_plones|length > 2
-      tags:
-        - plone
-        - plone3
-
-    - role: plone.plone_server
-      plone_config: "{{ playbook_plones[3]|default({}) }}"
-      when: playbook_plones|length > 3
-      tags:
-        - plone
-        - plone4
 
     - role: haproxy
       when: install_loadbalancer|default(True)
