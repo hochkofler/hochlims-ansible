@@ -1,0 +1,510 @@
+---
+#role/plone.plone_server_tasks/main.yml
+- name: Fail if Ansible is too old
+  fail:
+    msg: "We need at least Ansible 2.5.0. Please update: pip install -U ansible"
+  when: ansible_version.full is version('2.5.0', '<')
+
+- name: Fail if no plone initial password set
+  fail:
+    msg: "You must set the plone_initial_password variable."
+  when: not instance_config.plone_initial_password
+
+- name: Set convenience variables
+  set_fact:
+    plone_instance_home: "{{ instance_config.plone_target_path }}/{{ instance_config.plone_instance_name }}"
+    plone_instance_var_path: "{{ instance_config.plone_var_path }}/{{ instance_config.plone_instance_name }}"
+    plone_instance_backup_path: "{{ instance_config.plone_backup_path | default(instance_config.plone_var_path, true) }}/{{ instance_config.plone_instance_name }}"
+    supervisor_instance_discriminator: "{{ instance_config.plone_instance_name }}_"
+    plone_python_version: "{{ instance_config.plone_python_version }}"            # e.g. "2.7.18"
+    plone_python_major_version: "{{ instance_config.plone_python_version.split('.')[0] }}"
+    plone_pyenv_root: "/opt/pyenv"
+    plone_pyenv_env: "plone-{{ instance_config.plone_python_version }}"         # nombre del virtualenv pyenv
+
+###################################
+# Prerequisites & pyenv installation
+
+- include_tasks: "{{ ansible_os_family }}.yml"
+
+- name: Install packages for building Python
+  apt:
+    name:
+      - make
+      - build-essential
+      - libssl-dev
+      - zlib1g-dev
+      - libbz2-dev
+      - libreadline-dev
+      - libsqlite3-dev
+      - wget
+      - curl
+      - llvm
+      - libncurses5-dev
+      - libncursesw5-dev
+      - xz-utils
+      - tk-dev
+      - libffi-dev
+      - liblzma-dev
+    state: present
+    update_cache: yes
+  become: true
+
+- name: Ensure plone group exists
+  group:
+    name: "{{ instance_config.plone_group }}"
+
+- name: Ensure plone buildout user
+  user:
+    name: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+    generate_ssh_key: yes
+
+- name: Agregar /opt/pyenv como directorio seguro para git
+  ansible.builtin.command: git config --global --add safe.directory /opt/pyenv
+  become: true
+  become_user: plone_buildout
+
+- name: Restaurar ownership original (si querés volver atrás)
+  ansible.builtin.file:
+    path: /opt/pyenv
+    owner: root
+    group: root
+    recurse: yes
+
+- name: Check if pyenv repo already exists
+  ansible.builtin.stat:
+    path: "{{ plone_pyenv_root }}/.git"
+  register: pyenv_repo
+
+- name: Clone pyenv repository (if not present)
+  ansible.builtin.git:
+    repo: https://github.com/pyenv/pyenv.git
+    dest: "{{ plone_pyenv_root }}"
+    version: master
+    update: no           # no intenta hacer pull sobre un repo existente
+    force: yes           # opcional: fuerza reset si hubiera cambios locales
+  when: not pyenv_repo.stat.exists
+  become: true
+
+- name: Check if pyenv-virtualenv plugin is already installed
+  stat:
+    path: "{{ plone_pyenv_root }}/plugins/pyenv-virtualenv"
+  register: pyenv_virtualenv_plugin
+
+- name: Clone pyenv-virtualenv plugin
+  git:
+    repo: https://github.com/pyenv/pyenv-virtualenv.git
+    dest: "{{ plone_pyenv_root }}/plugins/pyenv-virtualenv"
+    update: yes
+  when: not pyenv_virtualenv_plugin.stat.exists
+  become: true
+
+- name: Create /etc/profile.d/pyenv.sh to load pyenv and pyenv-virtualenv
+  copy:
+    dest: /etc/profile.d/pyenv.sh
+    owner: root
+    group: root
+    mode: '0755'
+    content: |
+      export PYENV_ROOT="{{ plone_pyenv_root }}"
+      export PATH="$PYENV_ROOT/bin:$PATH"
+      if command -v pyenv >/dev/null 2>&1; then
+        eval "$(pyenv init -)"
+        eval "$(pyenv virtualenv-init -)"
+      fi
+  become: true
+
+- name: Source pyenv in current session for shell tasks
+  shell: "source /etc/profile.d/pyenv.sh"
+  args:
+    executable: /bin/bash
+
+- name: Install Python {{ plone_python_version }} via pyenv
+  shell: |
+    export PYENV_ROOT="{{ plone_pyenv_root }}"
+    "{{ plone_pyenv_root }}/bin/pyenv" install -s "{{ plone_python_version }}"
+  args:
+    creates: "{{ plone_pyenv_root }}/versions/{{ plone_python_version }}"
+  become: true
+
+- name: Create pyenv virtualenv for Plone
+  shell: |
+    export PYENV_ROOT="{{ plone_pyenv_root }}"
+    "{{ plone_pyenv_root }}/bin/pyenv" virtualenv "{{ plone_python_version }}" "{{ plone_pyenv_env }}"
+  args:
+    creates: "{{ plone_pyenv_root }}/versions/{{ plone_pyenv_env }}"
+  become: true
+
+- name: Ensure plone group exists
+  ansible.builtin.group:
+    name: "{{ instance_config.plone_group }}"
+    state: present
+
+# 1 Crear el usuario y su home
+- name: Ensure plone buildout user
+  user:
+    name: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+    create_home: yes
+    shell: /bin/bash
+
+# 2 Ahora sí podemos modificar su ~/.bashrc sin error
+- name: Activate pyenv-virtualenv for buildout user in .bashrc
+  become: true
+  lineinfile:
+    path: "/home/{{ instance_config.plone_buildout_user }}/.bashrc"
+    create: yes
+    insertafter: EOF
+    owner: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+    line: |
+      export PYENV_ROOT="{{ plone_pyenv_root }}"
+      export PATH="$PYENV_ROOT/bin:$PATH"
+      eval "$(pyenv init -)"
+      eval "$(pyenv virtualenv-init -)"
+      pyenv global "{{ plone_pyenv_env }}"
+
+
+- name: Set plone_python_path and plone_pip_path facts {{ plone_pyenv_root }}/versions/{{ plone_pyenv_env }}
+  set_fact:
+    plone_python_path: "{{ plone_pyenv_root }}/versions/{{ plone_pyenv_env }}/bin/python"
+    plone_pip_path:    "{{ plone_pyenv_root }}/versions/{{ plone_pyenv_env }}/bin/pip"
+
+###################################
+# Users and groups
+
+- name: Ensure plone daemon user
+  user:
+    name: "{{ instance_config.plone_daemon_user }}"
+    group: "{{ instance_config.plone_group }}"
+
+####################################
+# Directory structure
+
+- name: Ensure base directory
+  file:
+    path: "{{ instance_config.plone_target_path }}"
+    state: directory
+    mode: '0755'
+
+- name: Ensure var, backup & cache dirs
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner | default(instance_config.plone_daemon_user) }}"
+    group: "{{ instance_config.plone_group }}"
+    mode: "{{ item.mode | default('0755') }}"
+  loop:
+    - { path: "{{ instance_config.plone_var_path }}", mode: '0755' }
+    - { path: "{{ instance_config.plone_backup_path | default(instance_config.plone_var_path, true) }}", mode: '0755' }
+    - { path: "{{ instance_config.plone_target_path }}/buildout-cache", owner: "{{ instance_config.plone_buildout_user }}", mode: '0755' }
+    - { path: "{{ instance_config.plone_target_path }}/buildout-cache/eggs", owner: "{{ instance_config.plone_buildout_user }}", mode: '0755' }
+    - { path: "{{ instance_config.plone_target_path }}/buildout-cache/downloads", owner: "{{ instance_config.plone_buildout_user }}", mode: '0755' }
+
+- name: Fix ownership in buildout-cache if newly copied/downloaded
+  when: >
+    (copied_cache.changed | default(false))
+    or
+    (downloaded_cache.changed | default(false))
+  file:
+    path: "{{ instance_config.plone_target_path }}/buildout-cache"
+    owner: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+    recurse: yes
+
+- name: Ensure instance home directory
+  file:
+    path: "{{ plone_instance_home }}"
+    state: directory
+    owner: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+    mode: '0755'
+
+- name: Copy or git-clone buildout skeleton
+  block:
+    - name: Copy local skeleton (if no repo defined)
+      copy:
+        src: zeocluster/
+        dest: "{{ plone_instance_home }}"
+        owner: "{{ instance_config.plone_buildout_user }}"
+        group: "{{ instance_config.plone_group }}"
+      when: not instance_config.plone_buildout_git_repo
+
+    - name: Git clone skeleton (if repo defined)
+      git:
+        repo: "{{ instance_config.plone_buildout_git_repo }}"
+        version: "{{ instance_config.plone_buildout_git_version | default('HEAD') }}"
+        dest: "{{ plone_instance_home }}"
+        accept_hostkey: yes
+      become_user: "{{ instance_config.plone_buildout_user }}"
+      when: instance_config.plone_buildout_git_repo
+  rescue:
+    - debug:
+        msg: "Error fetching buildout skeleton"
+
+- name: Ensure var, backup & python-eggs in instance
+  file:
+    path: "{{ item.path }}"
+    state: directory
+    owner: "{{ item.owner }}"
+    group: "{{ instance_config.plone_group }}"
+    mode: "{{ item.mode }}"
+  loop:
+    - { path: "{{ plone_instance_var_path }}", owner: "{{ instance_config.plone_daemon_user }}", mode: '2770' }
+    - { path: "{{ plone_instance_backup_path }}", owner: "{{ instance_config.plone_daemon_user }}", mode: '2770' }
+    - { path: "{{ plone_instance_var_path }}/.python-eggs", owner: "{{ instance_config.plone_daemon_user }}", mode: '0700' }
+
+###################################
+# Buildout environment
+
+- name: Copy buildout.cfg template
+  template:
+    src: buildout.cfg.j2
+    dest: "{{ plone_instance_home }}/{{ instance_config.plone_buildout_cfg }}"
+    owner: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+    backup: yes
+  register: instance_status
+
+- name: Ensure requirements.txt exists
+  block:
+    - name: Check if requirements.txt exists
+      stat:
+        path: "{{ plone_instance_home }}/requirements.txt"
+      register: requirements_txt
+
+    - name: Download requirements.txt from Plone
+      get_url:
+        url: "https://dist.plone.org/release/{{ instance_config.plone_version }}/requirements.txt"
+        dest: "{{ plone_instance_home }}/requirements.txt"
+        owner: "{{ instance_config.plone_buildout_user }}"
+        group: "{{ instance_config.plone_group }}"
+        mode: '0444'
+      when: instance_config.plone_download_requirements_txt and not requirements_txt.stat.exists
+
+    - name: Generate requirements.txt from template
+      template:
+        src: requirements.txt.j2
+        dest: "{{ plone_instance_home }}/requirements.txt"
+        owner: "{{ instance_config.plone_buildout_user }}"
+        group: "{{ instance_config.plone_group }}"
+        backup: yes
+      when: not requirements_txt.stat.exists
+
+- name: Ensure ./bin exists
+  file:
+    path: "{{ plone_instance_home }}/bin"
+    state: directory
+    owner: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+    mode: '0755'
+
+- name: Check if buildout already ran
+  stat:
+    path: "{{ plone_instance_home }}/bin/client_reserved"
+  register: buildout_status
+
+- name: Ensure ownership of pyenv directory for plone_buildout user
+  ansible.builtin.file:
+    path: /opt/pyenv
+    state: directory
+    recurse: yes
+    owner: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+    mode: '0755'
+
+- name: Instalar dependencias nativas para WeasyPrint / Pango
+  become: true                # eleva a root
+  apt:
+    name:
+      - libcairo2
+      - libpango-1.0-0
+      - libpangoft2-1.0-0
+      - libpangocairo-1.0-0
+      - libharfbuzz0b
+      - libgdk-pixbuf2.0-0
+      - libffi-dev
+      - libjpeg-dev
+      - libopenjp2-7-dev
+    state: present
+    update_cache: yes
+
+
+- name: Install Python requirements into pyenv venv
+  command: "{{ plone_pip_path }} install -r {{ plone_instance_home }}/requirements.txt"
+  become_user: "{{ instance_config.plone_buildout_user }}"
+  when: requirements_txt.changed or not buildout_status.stat.exists
+
+###################################
+# Run buildout
+
+- name: Crear enlace simbólico para python2.7.18
+  ansible.builtin.file:
+    src: "{{ plone_pyenv_root }}/versions/{{ plone_pyenv_env }}/bin/python"
+    dest: /usr/local/bin/python2.7.18
+    state: link
+    force: true
+
+- name: Copy files from the buildout extra dir
+  copy:
+    src="{{ instance_config.plone_buildout_extra_dir }}"
+    dest="{{ plone_instance_home }}"
+    force=yes
+    backup=yes
+    owner={{ instance_config.plone_buildout_user }}
+    group={{ instance_config.plone_group }}
+  register: extra_dir_copy_result
+  when: instance_config.plone_buildout_extra_dir
+
+- name: Symlink buildout into instance_home/bin
+  file:
+    src: "{{ plone_pyenv_root }}/versions/{{ plone_pyenv_env }}/bin/buildout"
+    dest: "{{ plone_instance_home }}/bin/buildout"
+    state: link
+    owner: "{{ instance_config.plone_buildout_user }}"
+    group: "{{ instance_config.plone_group }}"
+  become: true
+
+- name: Configurar script-executable en buildout.cfg
+  ansible.builtin.lineinfile:
+    path: "{{ plone_instance_home }}/{{ instance_config.plone_buildout_cfg }}"
+    regexp: '^script-executable'
+    line: 'script-executable = {{ plone_pyenv_root }}/versions/{{ plone_pyenv_env }}/bin/python'
+    create: yes
+
+- name: Run buildout
+  shell: "bin/buildout -c {{ instance_config.plone_buildout_cfg }} > buildout.log 2>&1"
+  args:
+    chdir: "{{ plone_instance_home }}"
+  become_user: "{{ instance_config.plone_buildout_user }}"
+  register: ran_buildout
+  when:
+    - instance_config.plone_autorun_buildout | default(false)
+    - instance_status.changed or requirements_txt.changed or not buildout_status.stat.exists
+
+- name: Make buildout-cache group-readable
+  file:
+    path: "{{ instance_config.plone_target_path }}/buildout-cache"
+    mode: "g+r"
+    recurse: yes
+  when: ran_buildout.changed
+
+###################################
+# Supervisor setup
+
+- block:
+    - name: Instalar Superlance
+      shell: |
+        export PYENV_ROOT="{{ pyenv_root }}"
+        export PATH="{{ pyenv_bin_path }}:$PATH"
+        eval "$(pyenv init --path)"
+        pip install superlance==1.0
+      args:
+        executable: /bin/bash
+      environment:
+        PATH: "{{ pyenv_full_path }}"
+  when: instance_config.plone_use_supervisor and instance_config.plone_hot_monitor == 'superlance' and instance_config.plone_client_max_memory != "0"
+
+- name: Supervisor process control setup (Debian)
+  when: instance_config.plone_use_supervisor and ansible_os_family != 'Redhat'
+  template:
+    src: supervisor_task.j2
+    dest: "{{ instance_config.supervisor_config_dir }}/{{ supervisor_instance_discriminator }}zeo.conf"
+    mode: 644
+  register: supervisor_task_conf_debian
+
+- name: Supervisor process control setup (RedHat)
+  when: instance_config.plone_use_supervisor and ansible_os_family == 'RedHat'
+  template:
+    src: supervisor_task.j2
+    dest: "{{ instance_config.supervisor_config_dir }}/{{ supervisor_instance_discriminator }}zeo.ini"
+    owner: root
+    group: root
+    mode: 644
+  register: supervisor_task_conf_redhat
+
+- name: Ensure supervisord is running
+  when: instance_config.plone_use_supervisor
+  service:
+    name: "{{ supervisor_service_name }}"
+    state: started
+
+- name: Stop and remove memmon (ignore if missing)
+  shell: >
+    supervisorctl stop {{ supervisor_instance_discriminator }}memmon
+    && supervisorctl remove {{ supervisor_instance_discriminator }}memmon
+  become: true
+  ignore_errors: true
+
+- name: Supervisor task list is updated
+  when: instance_config.plone_use_supervisor and (supervisor_task_conf_debian.changed or supervisor_task_conf_redhat.changed)
+  shell: "supervisorctl update"
+
+- name: Supervisor zeoserver task is present
+  when: instance_config.plone_use_supervisor and instance_config.plone_install_zeoserver
+  supervisorctl:
+    name: "{{ supervisor_instance_discriminator }}zeoserver"
+    state: present
+
+- name: Supervisor zeoclient tasks are present
+  when: instance_config.plone_use_supervisor
+  supervisorctl:
+    name: "{{ supervisor_instance_discriminator }}zeoclient{{ item }}"
+    state: present
+  with_sequence: count="{{ instance_config.plone_client_count }}"
+
+- name: Supervisor zeoclients tasks are restarted
+  when: instance_config.plone_use_supervisor and instance_config.plone_restart_after_buildout and ran_buildout.changed
+  supervisorctl:
+    name: "{{ supervisor_instance_discriminator }}zeoclient{{ item }}"
+    state: restarted
+  with_sequence: count="{{ instance_config.plone_client_count }}"
+
+- name: Ensure scripts directory
+  file:
+    path: "{{ plone_instance_home }}/scripts"
+    state: directory
+
+##################################
+# Add Plone site
+
+- block:
+    - name: Pause to let ZODB settle a bit
+      pause:
+        seconds: 20
+
+    - name: Install site creation run script
+      template:
+        src: addPloneSite.py.j2
+        dest: "{{ plone_instance_home }}/scripts/addPloneSite.py"
+        mode: 0444
+
+    - name: Create initial Plone site
+      become_user: "{{ instance_config.plone_daemon_user }}"
+      command: bin/client_reserved run scripts/addPloneSite.py
+      args:
+        chdir: "{{ plone_instance_home }}"
+  when: instance_config.plone_use_supervisor and instance_config.plone_create_site and not db_status.stat.exists
+
+###################################
+# cron jobs
+
+- name: Pack cron job
+  when: instance_config.plone_pack_at
+  cron:
+    name: "{{ instance_config.plone_instance_name }} Plone packing"
+    job: "cd {{ plone_instance_home }} && bin/zeopack && echo 'zeopack_success for {{ instance_config.plone_instance_name }}'"
+    user: "{{ instance_config.plone_daemon_user }}"
+    minute: "{{ instance_config.plone_pack_at.minute }}"
+    hour: "{{ instance_config.plone_pack_at.hour }}"
+    weekday: "{{ instance_config.plone_pack_at.weekday }}"
+
+- name: Backup cron job
+  when: instance_config.plone_backup_at
+  cron:
+    name: "{{ instance_config.plone_instance_name }} Plone backup"
+    job: "cd {{ plone_instance_home }} && bin/backup && echo 'backup_success for {{ instance_config.plone_instance_name }}'"
+    user: "{{ instance_config.plone_daemon_user }}"
+    minute: "{{ instance_config.plone_backup_at.minute }}"
+    hour: "{{ instance_config.plone_backup_at.hour }}"
+    weekday: "{{ instance_config.plone_backup_at.weekday }}"

@@ -1,0 +1,67 @@
+---
+# Debian-family dependencies & pyenv pre‑reqs
+
+- name: Update and upgrade apt packages
+  apt:
+    update_cache: yes
+    upgrade: dist
+
+# Sustitúyelo por:
+- name: Instalar dependencias de compilación necesarias para pyenv (Ubuntu 24.04)
+  apt:
+    name:
+      - build-essential
+      - libssl-dev
+      - zlib1g-dev
+      - libbz2-dev
+      - libreadline-dev
+      - libsqlite3-dev
+      - wget
+      - curl
+      - llvm
+      - libncurses5-dev
+      - libncursesw5-dev
+      - xz-utils
+      - tk-dev
+      - libffi-dev
+      - liblzma-dev
+      #- python-openssl
+    state: present
+  become: true
+
+#- name: Ensure required python2 packages for Plone
+#  apt:
+#    pkg: "{{ plone_debian_python2_packages }}"
+#    state: present
+#  when: plone_python_major_version == '2'
+
+- name: Ensure required python3 packages for Plone
+  apt:
+    pkg: "{{ plone_debian_python3_packages }}"
+    state: present
+  when: plone_python_major_version == '3'
+
+- name: Ensure other Debian packages for Plone
+  apt:
+    pkg: "{{ plone_debian_packages }}"
+    state: present
+
+# No necesitamos virtualenv_path porque utilizamos pyenv
+# Las tareas de instalación y configuración de supervisor quedan igual:
+
+- name: Ensure supervisor is started & enabled
+  service:
+    name: supervisor
+    state: started
+    enabled: yes
+  when: instance_config.plone_use_supervisor
+
+- name: Set supervisor service name
+  set_fact:
+    supervisor_service_name: supervisor
+
+- name: Enable supervisor on Xenial (legacy)
+  shell: systemctl enable supervisor.service
+  when:
+    - instance_config.plone_use_supervisor
+    - ansible_distribution_release == 'xenial'
