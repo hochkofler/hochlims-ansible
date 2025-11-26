@@ -31,7 +31,7 @@ defaults
 listen admin
     bind *:{{ loadbalancer_monitor_port }}
     stats enable
-    stats uri /admin
+    stats uri /haproxy_status
     # We're only connecting via ssh
     # stats auth haproxy:{{ admin_secret|default('notsosecret') }}
 

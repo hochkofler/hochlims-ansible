@@ -19,9 +19,9 @@
      - local-configure.yml
      - null.yml
 
-  - include: firewalls/debian-ufw.yml
+  - include_tasks: firewalls/debian-ufw.yml
     when: ansible_os_family == 'Debian'
 
-  - include: firewalls/centos-firewalld.yml
+  - include_tasks: firewalls/centos-firewalld.yml
     when: ansible_os_family == 'RedHat'
 
