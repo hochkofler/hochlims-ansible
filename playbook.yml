@@ -132,6 +132,10 @@
       when: install_muninnode|default(True)
       tags: munin
 
+    - role: munin-master
+      when: install_muninnode|default(True)
+      tags: munin-master
+
     - role: timezone
       when: set_timezone|default(True)
       tags: timezone

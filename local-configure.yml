@@ -23,7 +23,7 @@ admin_email: senaite@laboratoriosifa.tecnologia.bo
 plone_initial_password: Bolivia444**
 
 muninnode_query_ips:
-    - ip.of.munin.monitor
+    - 127.0.0.1
 
 # If you do not have a Munin monitor running, comment out the
 # muninnode_query_ips and uncomment the line below:
@@ -41,8 +41,9 @@ plone_version: '5.2.15'
 plone_python_version: '2.7.18'
 
 # 2 clients
-plone_client_count: 1
+plone_client_count: 3
 
+proxycache_port: 8080
 # smallish
 plone_zodb_cache_size: 50000
 
@@ -58,25 +59,52 @@ plone_create_site: no
 
 plone_buildout_cfg: buildout.cfg
 
-plone_instance_name: senaitelims
+plone_instance_name: hochlims
+instance_name_site: senaite_prd
 timezone: America/La_Paz
 
 #plone_buildout_git_repo: https://github.com/hochkofler/ifalimsbuildout.git
 #plone_buildout_git_version: main
 
-#plone_target_path: /home/senaite
+plone_target_path: /home/lims
 plone_additional_versions:
-#    - senaite.lims = 2.6.0
     - et-xmlfile = 1.1.0
     - collective.recipe.backup = 4.2.0
+    - magnitude = 1.0.1
+    - senaitelims = 2.x
 
 plone_setuptools_version: '44.1.1'
 plone_zc_buildout_version: '2.13.8'
-mail_hostname: mail.laboratoriosifa.com
+mail_hostname: laboratoriosifa.tecnologia.bo
 
 plone_extra_find_links:
     - https://dist.plone.org/release/5.2.15/
     - https://dist.plone.org/thirdparty/
 
-#plone_additional_eggs:
-#    - senaite.lims
+plone_additional_eggs:
+    - hoch.lims
+    - senaite.lims
+    - senaite.app.listing
+    - senaite.app.spotlight
+    - senaite.app.supermodel
+    - senaite.impress
+    - senaite.jsonapi
+
+plone_sources:
+    - hoch.lims = git https://github.com/hochkofler/hoch.lims.git
+    - senaite.lims = git https://github.com/senaite/senaite.lims.git branch=2.x
+    - senaite.core = git https://github.com/hochkofler/senaite.core.git branch=hoch-prod
+    - senaite.app.listing = git https://github.com/senaite/senaite.app.listing.git branch=2.x
+    - senaite.app.spotlight = git https://github.com/senaite/senaite.app.spotlight.git branch=2.x
+    - senaite.app.supermodel = git https://github.com/senaite/senaite.app.supermodel.git branch=2.x
+    - senaite.impress = git https://github.com/senaite/senaite.impress.git branch=2.x
+    - senaite.jsonapi = git https://github.com/senaite/senaite.jsonapi.git branch=2.x
+
+plone_extra_parts:
+    test: |
+        recipe = zc.recipe.testrunner
+        defaults = ['--auto-color', '--auto-progress']
+        eggs =
+            senaite.lims [test]
+            senaite.core [test]
+            hoch.lims [test]

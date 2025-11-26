@@ -27,7 +27,7 @@ plone:
 {% endfor %}
 {% endfor %}
 {% if install_loadbalancer %}
-haproxy monitor: http://127.0.0.1:{{ loadbalancer_monitor_port }}/admin
+haproxy monitor: http://127.0.0.1:{{ loadbalancer_monitor_port }}/haproxy_status
 {% endif %}
 {% if install_proxycache %}
 varnish: 127.0.0.1:{{ proxycache_port }}

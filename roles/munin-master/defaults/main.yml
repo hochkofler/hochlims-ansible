@@ -1,0 +1,2 @@
+munin_nginx_conf: /etc/nginx/sites-available/munin.conf
+munin_alias_path: /var/cache/munin/www/

@@ -1,0 +1,53 @@
+---
+- name: Instalar munin (master)
+  apt:
+    name: munin
+    state: present
+    update_cache: yes
+
+- name: Asegurar que localhost esté configurado en munin.conf
+  lineinfile:
+    path: /etc/munin/munin.conf
+    regexp: '^\[localhost\]'
+    line: '[localhost]'
+
+- name: Asegurar parámetros de localhost en munin.conf
+  blockinfile:
+    path: /etc/munin/munin.conf
+    insertafter: '^\[localhost\]'
+    block: |
+      address 127.0.0.1
+      use_node_name yes
+
+- name: Forzar creación inicial de gráficos Munin
+  command: /usr/bin/munin-cron
+  become_user: munin
+  register: munin_cron_output
+  changed_when: false
+
+- debug:
+    var: munin_cron_output.stdout
+
+- name: Crear configuración de Nginx para Munin
+  template:
+    src: munin.conf.j2
+    dest: "{{ munin_nginx_conf }}"
+  notify: reload nginx
+
+- name: Habilitar sitio munin en nginx
+  file:
+    src: "{{ munin_nginx_conf }}"
+    dest: /etc/nginx/sites-enabled/munin.conf
+    state: link
+  notify: reload nginx
+
+- name: Asegurar location /munin/ en http_senaite
+  blockinfile:
+    path: /etc/nginx/sites-enabled/http_senaite
+    insertafter: '^server'
+    block: |
+      location /munin/ {
+          alias {{ munin_alias_path }};
+          autoindex on;
+      }
+  notify: reload nginx

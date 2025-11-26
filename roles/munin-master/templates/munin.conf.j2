@@ -1,0 +1,13 @@
+server {
+    listen 80;
+    server_name _;
+
+    location /munin {
+        alias {{ munin_alias_path }};
+        index index.html;
+        autoindex on;
+        access_log off;
+        allow 127.0.0.1;
+        deny all;
+    }
+}
